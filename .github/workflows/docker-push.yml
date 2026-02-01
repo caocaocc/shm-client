@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - '*'
+  workflow_dispatch:
 
 jobs:
   build-and-push:
@@ -43,6 +44,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/shm-client:${{ steps.version.outputs.TAG }}
             ${{ secrets.DOCKERHUB_USERNAME }}/shm-client:${{ steps.version.outputs.minor }}
             ${{ secrets.DOCKERHUB_USERNAME }}/shm-client:latest
           cache-from: type=gha,scope=client
