@@ -7,10 +7,10 @@ services:
       - "3001:80"
     environment:
       # API http or fastcgi
-      # - API=fastcgi
+      - API=fastcgi
       # SHM_URL http://api if API=http 
-      # or SHM_URL=http://core if API=fastcgi
-      - SHM_URL=http://core
+      # or SHM_URL=http://core:9082 if API=fastcgi
+      - SHM_URL=http://core:9082
       # Optional: custom base path (e.g., /client)
       # - SHM_BASE_PATH=/
       # - TELEGRAM_BOT_NAME=your_bot

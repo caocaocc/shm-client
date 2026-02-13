@@ -1,9 +1,12 @@
 #!/bin/sh
 
 API_MODE="${API:-http}"
+TEMPLATE_DIR="/etc/nginx/templates"
+
+rm -f /etc/nginx/conf.d/*.conf
 
 if [ "$API_MODE" = "fastcgi" ]; then
-    cp /etc/nginx/conf.d/fastcgi.conf /etc/nginx/conf.d/default.conf
+    cp "$TEMPLATE_DIR/fastcgi.conf" /etc/nginx/conf.d/default.conf
 
     FASTCGI_SERVER=""
     if [ ! -z "$SHM_HOST" ]; then
@@ -18,7 +21,7 @@ if [ "$API_MODE" = "fastcgi" ]; then
         sed -i "s|#SERVER|$FASTCGI_SERVER|" /etc/nginx/conf.d/default.conf
     fi
 else
-    cp /etc/nginx/conf.d/http.conf /etc/nginx/conf.d/default.conf
+    cp "$TEMPLATE_DIR/http.conf" /etc/nginx/conf.d/default.conf
 
     PROXY_URL=""
     if [ ! -z "$SHM_URL" ]; then
