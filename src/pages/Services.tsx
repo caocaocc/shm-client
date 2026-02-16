@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { Card, Text, Stack, Group, Badge, Button, Modal, ActionIcon, Loader, Center, Paper, Title, Tabs, Code, CopyButton, Tooltip, Accordion, Box } from '@mantine/core';
-import { IconQrcode, IconCopy, IconCheck, IconDownload, IconRefresh, IconTrash, IconPlus, IconPlayerStop } from '@tabler/icons-react';
+import { IconQrcode, IconCopy, IconCheck, IconDownload, IconRefresh, IconTrash, IconPlus, IconPlayerStop, IconExchange } from '@tabler/icons-react';
 import { useDisclosure } from '@mantine/hooks';
 import { useTranslation } from 'react-i18next';
-import { api, userApi } from '../api/client';
+import { api, servicesApi, userApi } from '../api/client';
 import { notifications } from '@mantine/notifications';
 import QrModal from '../components/QrModal';
 import OrderServiceModal from '../components/OrderServiceModal';
@@ -22,6 +22,7 @@ interface UserService {
   service: ServiceInfo;
   status: string;
   expire: string | null;
+  next: number | null;
   created: string;
   parent: number | null;
   settings?: Record<string, unknown>;
@@ -53,11 +54,14 @@ function normalizeCategory(category: string): string {
 interface ServiceDetailProps {
   service: UserService;
   onDelete?: () => void;
+  onChangeTariff?: (service: UserService) => void;
 }
 
-function ServiceDetail({ service, onDelete }: ServiceDetailProps) {
+function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps) {
   const [storageData, setStorageData] = useState<string | null>(null);
   const [subscriptionUrl, setSubscriptionUrl] = useState<string | null>(null);
+  const [nextServiceInfo, setNextServiceInfo] = useState<{ name: string; cost: number } | null>(null);
+  const [nextServiceLoading, setNextServiceLoading] = useState(false);
   const [, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<string | null>('info');
   const [qrModalOpen, setQrModalOpen] = useState(false);
@@ -88,6 +92,7 @@ function ServiceDetail({ service, onDelete }: ServiceDetailProps) {
 
   const canDelete = ['BLOCK', 'NOT PAID', 'ERROR'].includes(service.status);
   const canStop = service.status === 'ACTIVE';
+  const canChange = ['BLOCK', 'ACTIVE'].includes(service.status);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -171,6 +176,32 @@ function ServiceDetail({ service, onDelete }: ServiceDetailProps) {
     fetchData();
   }, [service.user_service_id, category]);
 
+  useEffect(() => {
+    const fetchNextService = async () => {
+      if (!service.next) {
+        setNextServiceInfo(null);
+        return;
+      }
+      setNextServiceLoading(true);
+      try {
+        const response = await servicesApi.order_list({ service_id: String(service.next) });
+        const data = response.data.data || [];
+        const nextService = Array.isArray(data) ? data[0] : data;
+        if (nextService?.name && typeof nextService.cost === 'number') {
+          setNextServiceInfo({ name: nextService.name, cost: nextService.cost });
+        } else {
+          setNextServiceInfo(null);
+        }
+      } catch {
+        setNextServiceInfo(null);
+      } finally {
+        setNextServiceLoading(false);
+      }
+    };
+
+    fetchNextService();
+  }, [service.next]);
+
   const isVpn = category === 'vpn';
   const isProxy = category === 'proxy';
   const isVpnOrProxy = isVpn || isProxy;
@@ -181,12 +212,11 @@ function ServiceDetail({ service, onDelete }: ServiceDetailProps) {
     <Stack gap="md">
       <Group justify="space-between">
         <div>
-          <Text fw={700} size="lg">{service.service.name}</Text>
+          <Text fw={700} size="lg">#{service.user_service_id} - {service.service.name}</Text>
           <Badge color={statusColor} variant="light">
             {statusLabel}
           </Badge>
         </div>
-        <Text size="sm" c="dimmed">ID: {service.user_service_id}</Text>
       </Group>
 
       <Tabs value={activeTab} onChange={setActiveTab}>
@@ -209,6 +239,18 @@ function ServiceDetail({ service, onDelete }: ServiceDetailProps) {
               <Group justify="space-between">
                 <Text size="sm" c="dimmed">{t('services.validUntil')}:</Text>
                 <Text size="sm">{new Date(service.expire as string).toLocaleDateString(i18n.language === 'ru' ? 'ru-RU' : 'en-US')}</Text>
+              </Group>
+            )}
+            {service.next && (
+              <Group justify="space-between">
+                <Text size="sm" c="dimmed">{t('services.validUntilNext')}:</Text>
+                {nextServiceLoading ? (
+                  <Text size="sm">{t('common.loading')}</Text>
+                ) : nextServiceInfo ? (
+                  <Text size="sm">{nextServiceInfo.name} - {nextServiceInfo.cost} {t('common.currency')}</Text>
+                ) : (
+                  <Text size="sm">{service.next}</Text>
+                )}
               </Group>
             )}
             {service.children && service.children.length > 0 && (
@@ -284,6 +326,19 @@ function ServiceDetail({ service, onDelete }: ServiceDetailProps) {
           </Tabs.Panel>
         )}
       </Tabs>
+
+      {canChange && (
+        <Button
+          color="blue"
+          variant="light"
+          leftSection={<IconExchange size={16} />}
+          onClick={() => onChangeTariff?.(service)}
+          mt="md"
+          fullWidth
+        >
+          {t('services.changeService')}
+        </Button>
+      )}
 
       {canStop && (
         <Button
@@ -381,7 +436,7 @@ function ServiceCard({ service, onClick, isChild = false, isLastChild = false }:
         >
           <Group justify="space-between">
             <div>
-              <Text fw={500} size="sm">{service.service.name}</Text>
+              <Text fw={500} size="sm">#{service.user_service_id} - {service.service.name}</Text>
               {service.expire && (
                 <Text size="xs" c="dimmed">
                   {new Date(service.expire as string).toLocaleDateString(i18n.language === 'ru' ? 'ru-RU' : 'en-US')}
@@ -412,7 +467,7 @@ function ServiceCard({ service, onClick, isChild = false, isLastChild = false }:
     >
       <Group justify="space-between">
         <div>
-          <Text fw={500}>{service.service.name}</Text>
+          <Text fw={500}>#{service.user_service_id} - {service.service.name}</Text>
           {service.expire && (
             <Text size="xs" c="dimmed">
               {new Date(service.expire as string).toLocaleDateString(i18n.language === 'ru' ? 'ru-RU' : 'en-US')}
@@ -438,6 +493,8 @@ export default function Services() {
   const [selectedService, setSelectedService] = useState<UserService | null>(null);
   const [opened, { open, close }] = useDisclosure(false);
   const [orderModalOpened, { open: openOrderModal, close: closeOrderModal }] = useDisclosure(false);
+  const [changeModalOpened, { open: openChangeModal, close: closeChangeModal }] = useDisclosure(false);
+  const [changeService, setChangeService] = useState<UserService | null>(null);
   const refreshAttemptsRef = useRef(0);
   const { t } = useTranslation();
 
@@ -526,6 +583,12 @@ export default function Services() {
   const handleServiceClick = (service: UserService) => {
     setSelectedService(service);
     open();
+  };
+
+  const handleChangeTariff = (service: UserService) => {
+    setChangeService(service);
+    close();
+    openChangeModal();
   };
 
   const groupedServices = services.reduce((acc, service) => {
@@ -619,6 +682,7 @@ export default function Services() {
               refreshAttemptsRef.current = 0;
               fetchServices();
             }}
+            onChangeTariff={handleChangeTariff}
           />
         )}
       </Modal>
@@ -627,6 +691,30 @@ export default function Services() {
         opened={orderModalOpened}
         onClose={closeOrderModal}
         onOrderSuccess={() => {
+          refreshAttemptsRef.current = 0;
+          fetchServices();
+        }}
+      />
+
+      <OrderServiceModal
+        opened={changeModalOpened}
+        onClose={() => {
+          setChangeService(null);
+          closeChangeModal();
+        }}
+        mode="change"
+        currentService={
+          changeService
+            ? {
+                user_service_id: changeService.user_service_id,
+                service_id: changeService.service_id,
+                status: changeService.status,
+                category: changeService.service.category,
+                name: changeService.service.name,
+              }
+            : undefined
+        }
+        onChangeSuccess={() => {
           refreshAttemptsRef.current = 0;
           fetchServices();
         }}

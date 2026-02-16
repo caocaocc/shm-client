@@ -124,6 +124,7 @@ export const userApi = {
   changePassword: (password: string) => api.post('/user/passwd', { password }),
   getServices: () => api.get('/user/service'),
   stopService: (userServiceId: number) => api.post('/user/service/stop', { user_service_id: userServiceId }),
+  changeService: (userServiceId: number, serviceId: number, finish_active: number) => api.post('/user/service/change', { user_service_id: userServiceId, service_id: serviceId, finish_active: finish_active }),
   getPayments: () => api.get('/user/pay'),
   getPaySystems: () => api.get('/user/pay/paysystems'),
   getForecast: () => api.get('/user/pay/forecast'),
@@ -137,7 +138,9 @@ export const storageApi = {
 
 export const servicesApi = {
   list: () => api.get('/service'),
-  order_list: () => api.get('/service/order'),
+  order_list: (filter?: { category?: string; service_id?: number | string }) => api.get('/service/order', {
+    params: filter ? { filter: JSON.stringify(filter) } : {},
+  }),
   order: (serviceId: number) => api.put('/service/order', { service_id: serviceId }),
   getOrderList: () => api.get('/service/order'),
 };

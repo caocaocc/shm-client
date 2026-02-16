@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, Stack, Text, Card, Group, Badge, Loader, Center, Button, Paper, Divider, Select, NumberInput, Alert } from '@mantine/core';
+import { Modal, Stack, Text, Card, Group, Badge, Loader, Center, Button, Paper, Divider, Select, NumberInput, Alert, Checkbox } from '@mantine/core';
 import { IconArrowLeft, IconCreditCard, IconCheck, IconWallet } from '@tabler/icons-react';
 import { servicesApi, userApi } from '../api/client';
 import { notifications } from '@mantine/notifications';
@@ -23,6 +23,15 @@ interface OrderServiceModalProps {
   opened: boolean;
   onClose: () => void;
   onOrderSuccess?: () => void;
+  mode?: 'order' | 'change';
+  currentService?: {
+    user_service_id: number;
+    service_id: number;
+    status: string;
+    category: string;
+    name?: string;
+  };
+  onChangeSuccess?: () => void;
 }
 
 function normalizeCategory(category: string): string {
@@ -38,7 +47,14 @@ function normalizeCategory(category: string): string {
   return 'other';
 }
 
-export default function OrderServiceModal({ opened, onClose, onOrderSuccess }: OrderServiceModalProps) {
+export default function OrderServiceModal({
+  opened,
+  onClose,
+  onOrderSuccess,
+  mode = 'order',
+  currentService,
+  onChangeSuccess,
+}: OrderServiceModalProps) {
   const { t } = useTranslation();
   const [services, setServices] = useState<OrderService[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,23 +66,42 @@ export default function OrderServiceModal({ opened, onClose, onOrderSuccess }: O
   const [payAmount, setPayAmount] = useState<number | string>(0);
   const [paySystemsLoading, setPaySystemsLoading] = useState(false);
   const [paySystemsLoaded, setPaySystemsLoaded] = useState(false);
+  const [finishAfterActive, setFinishAfterActive] = useState(false);
+
+  const isChangeMode = mode === 'change';
+  const canDeferChange = isChangeMode && currentService?.status === 'ACTIVE';
+
+  useEffect(() => {
+    if (opened) {
+      setSelectedService(null);
+      setFinishAfterActive(false);
+    }
+  }, [opened, mode, currentService?.service_id]);
 
   useEffect(() => {
     if (opened) {
       fetchServices();
-      fetchUserBalance();
+      if (!isChangeMode) {
+        fetchUserBalance();
+      }
     }
-  }, [opened]);
+  }, [opened, isChangeMode, currentService?.category]);
 
   useEffect(() => {
-    if (selectedService) {
+    if (selectedService && !isChangeMode) {
       const needToPay = Math.max(0, Math.ceil((selectedService.cost - userBalance) * 100) / 100);
       setPayAmount(needToPay);
       if (userBalance < selectedService.cost && !paySystemsLoaded) {
         loadPaySystems();
       }
     }
-  }, [selectedService, userBalance]);
+  }, [selectedService, userBalance, isChangeMode]);
+
+  useEffect(() => {
+    if (isChangeMode) {
+      setFinishAfterActive(false);
+    }
+  }, [selectedService, isChangeMode]);
 
   const fetchUserBalance = async () => {
     try {
@@ -80,8 +115,14 @@ export default function OrderServiceModal({ opened, onClose, onOrderSuccess }: O
   const fetchServices = async () => {
     setLoading(true);
     try {
-      const response = await servicesApi.order_list();
-      setServices(response.data.data || []);
+      const response = await servicesApi.order_list(
+        isChangeMode && currentService?.category ? { category: currentService.category } : undefined
+      );
+      const data: OrderService[] = response.data.data || [];
+      const filtered = isChangeMode && currentService?.service_id
+        ? data.filter(service => service.service_id !== currentService.service_id)
+        : data;
+      setServices(filtered);
     } catch (error) {
       notifications.show({
         title: t('common.error'),
@@ -178,13 +219,42 @@ export default function OrderServiceModal({ opened, onClose, onOrderSuccess }: O
     }
   };
 
+  const handleChange = async () => {
+    if (!selectedService || !currentService) return;
+
+    setOrdering(true);
+    try {
+      const finishActive = canDeferChange && finishAfterActive ? 1 : 0;
+      await userApi.changeService(currentService.user_service_id, selectedService.service_id, finishActive);
+
+      notifications.show({
+        title: t('common.success'),
+        message: t('services.changeServiceSuccess'),
+        color: 'green',
+      });
+
+      onChangeSuccess?.();
+      handleClose();
+    } catch (error) {
+      notifications.show({
+        title: t('common.error'),
+        message: t('services.changeServiceError'),
+        color: 'red',
+      });
+    } finally {
+      setOrdering(false);
+    }
+  };
+
   const handleClose = () => {
     setSelectedService(null);
+    setFinishAfterActive(false);
     onClose();
   };
 
   const handleBack = () => {
     setSelectedService(null);
+    setFinishAfterActive(false);
   };
 
   const groupedServices = services.reduce((acc, service) => {
@@ -203,7 +273,11 @@ export default function OrderServiceModal({ opened, onClose, onOrderSuccess }: O
     <Modal
       opened={opened}
       onClose={handleClose}
-      title={selectedService ? t('order.serviceDetails') : t('order.title')}
+      title={
+        selectedService
+          ? t('order.serviceDetails')
+          : (isChangeMode ? t('services.changeServiceTitle') : t('order.title'))
+      }
       size="lg"
     >
       {loading ? (
@@ -255,80 +329,104 @@ export default function OrderServiceModal({ opened, onClose, onOrderSuccess }: O
             </Stack>
           </Paper>
 
-          <Alert
-            variant="light"
-            color={userBalance >= selectedService.cost ? 'green' : 'yellow'}
-            icon={<IconWallet size={18} />}
-          >
-            <Group justify="space-between">
-              <Text size="sm">{t('order.yourBalance')}: <Text span fw={600}>{userBalance} ₽</Text></Text>
-              {userBalance >= selectedService.cost ? (
-                <Badge color="green" variant="light">{t('order.enoughToPay')}</Badge>
-              ) : (
-                <Badge color="yellow" variant="light">{t('order.needTopUp', { amount: Math.ceil((selectedService.cost - userBalance) * 100) / 100 })}</Badge>
+          {isChangeMode ? (
+            <Stack gap="sm">
+              {canDeferChange && (
+                <Checkbox
+                  label={t('services.changeAfterEnd')}
+                  checked={finishAfterActive}
+                  onChange={(event) => setFinishAfterActive(event.currentTarget.checked)}
+                />
               )}
-            </Group>
-          </Alert>
-
-          {userBalance >= selectedService.cost ? (
-            <Button
-              fullWidth
-              size="md"
-              color="green"
-              leftSection={<IconCheck size={18} />}
-              onClick={handleOrder}
-              loading={ordering}
-            >
-              {t('order.orderFor', { amount: selectedService.cost })}
-            </Button>
-          ) : (
-            <>
-              <Paper withBorder p="md" radius="md">
-                <Stack gap="md">
-                  <Text fw={500}>{t('order.topUpBalance')}</Text>
-
-                  {paySystemsLoading ? (
-                    <Group justify="center" py="md">
-                      <Loader size="sm" />
-                      <Text size="sm">{t('payments.loadingPaymentSystems')}</Text>
-                    </Group>
-                  ) : paySystems.length === 0 ? (
-                    <Text c="dimmed" size="sm">{t('payments.noPaymentSystems')}</Text>
-                  ) : (
-                    <>
-                      <Select
-                        label={t('payments.paymentSystem')}
-                        placeholder={t('payments.selectPaymentSystem')}
-                        data={paySystems.map(ps => ({ value: ps.name, label: ps.name }))}
-                        value={selectedPaySystem}
-                        onChange={setSelectedPaySystem}
-                      />
-                      <NumberInput
-                        label={t('payments.amount')}
-                        placeholder={t('payments.enterAmount')}
-                        value={payAmount}
-                        onChange={setPayAmount}
-                        min={Math.ceil((selectedService.cost - userBalance) * 100) / 100}
-                        step={10}
-                        decimalScale={2}
-                        suffix=" ₽"
-                        description={`${t('order.minimum')}: ${(Math.ceil((selectedService.cost - userBalance) * 100) / 100).toFixed(2)} ₽ (${t('order.missingAmount')})`}
-                      />
-                    </>
-                  )}
-                </Stack>
-              </Paper>
-
               <Button
                 fullWidth
                 size="md"
-                leftSection={<IconCreditCard size={18} />}
-                onClick={handleOrderAndPay}
+                color="blue"
+                leftSection={<IconCheck size={18} />}
+                onClick={handleChange}
                 loading={ordering}
-                disabled={!selectedPaySystem || paySystemsLoading}
               >
-                {t('order.orderAndPay', { amount: payAmount })}
+                {t('services.changeService')}
               </Button>
+            </Stack>
+          ) : (
+            <>
+              <Alert
+                variant="light"
+                color={userBalance >= selectedService.cost ? 'green' : 'yellow'}
+                icon={<IconWallet size={18} />}
+              >
+                <Group justify="space-between">
+                  <Text size="sm">{t('order.yourBalance')}: <Text span fw={600}>{userBalance} ₽</Text></Text>
+                  {userBalance >= selectedService.cost ? (
+                    <Badge color="green" variant="light">{t('order.enoughToPay')}</Badge>
+                  ) : (
+                    <Badge color="yellow" variant="light">{t('order.needTopUp', { amount: Math.ceil((selectedService.cost - userBalance) * 100) / 100 })}</Badge>
+                  )}
+                </Group>
+              </Alert>
+
+              {userBalance >= selectedService.cost ? (
+                <Button
+                  fullWidth
+                  size="md"
+                  color="green"
+                  leftSection={<IconCheck size={18} />}
+                  onClick={handleOrder}
+                  loading={ordering}
+                >
+                  {t('order.orderFor', { amount: selectedService.cost })}
+                </Button>
+              ) : (
+                <>
+                  <Paper withBorder p="md" radius="md">
+                    <Stack gap="md">
+                      <Text fw={500}>{t('order.topUpBalance')}</Text>
+
+                      {paySystemsLoading ? (
+                        <Group justify="center" py="md">
+                          <Loader size="sm" />
+                          <Text size="sm">{t('payments.loadingPaymentSystems')}</Text>
+                        </Group>
+                      ) : paySystems.length === 0 ? (
+                        <Text c="dimmed" size="sm">{t('payments.noPaymentSystems')}</Text>
+                      ) : (
+                        <>
+                          <Select
+                            label={t('payments.paymentSystem')}
+                            placeholder={t('payments.selectPaymentSystem')}
+                            data={paySystems.map(ps => ({ value: ps.name, label: ps.name }))}
+                            value={selectedPaySystem}
+                            onChange={setSelectedPaySystem}
+                          />
+                          <NumberInput
+                            label={t('payments.amount')}
+                            placeholder={t('payments.enterAmount')}
+                            value={payAmount}
+                            onChange={setPayAmount}
+                            min={Math.ceil((selectedService.cost - userBalance) * 100) / 100}
+                            step={10}
+                            decimalScale={2}
+                            suffix=" ₽"
+                            description={`${t('order.minimum')}: ${(Math.ceil((selectedService.cost - userBalance) * 100) / 100).toFixed(2)} ₽ (${t('order.missingAmount')})`}
+                          />
+                        </>
+                      )}
+                    </Stack>
+                  </Paper>
+
+                  <Button
+                    fullWidth
+                    size="md"
+                    leftSection={<IconCreditCard size={18} />}
+                    onClick={handleOrderAndPay}
+                    loading={ordering}
+                    disabled={!selectedPaySystem || paySystemsLoading}
+                  >
+                    {t('order.orderAndPay', { amount: payAmount })}
+                  </Button>
+                </>
+              )}
             </>
           )}
         </Stack>
