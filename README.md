@@ -20,7 +20,7 @@ services:
 #   admin:
 #     ...
   client:
-    image: idsmef/vbios-client:latest
+    image: idsmef/vbios-client-2:latest
     pull_policy: always
     restart: always
     ports:
