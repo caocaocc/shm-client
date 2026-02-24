@@ -20,7 +20,7 @@ services:
 #   admin:
 #     ...
   client:
-    image: bkeenke/shm-client:latest
+    image: idsmef/vbios-client:latest
     pull_policy: always
     restart: always
     ports:
@@ -41,7 +41,7 @@ services:
 | `SHM_URL` | URL API сервера SHM | `http://shm.local` |
 | `SHM_HOST` | Альтернатива SHM_URL | - |
 | `SHM_BASE_PATH` | Базовый путь (например `/cabinet`) | `/` |
-| `APP_NAME` | Название приложения | `SHM Client` |
+| `APP_NAME` | Название приложения | `vBios Client` |
 | `TELEGRAM_BOT_NAME` | Username Telegram бота (без @) s| - |
 | `TELEGRAM_BOT_AUTH_ENABLE` | Включить авторизацию через Telegram виджет | `false` |
 | `TELEGRAM_WEBAPP_AUTH_ENABLE` | Авторизация через телеграмм вебапп | `false` |
