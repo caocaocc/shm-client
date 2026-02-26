@@ -1,14 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, Text, Stack, Group, Button, TextInput, ActionIcon, Loader, Box, Modal } from '@mantine/core';
 import { IconFingerprint, IconTrash, IconEdit, IconPlus, IconDeviceMobile } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { useTranslation } from 'react-i18next';
-import { usePasskeyList, usePasskeyRename, usePasskeyDelete, usePasskeyRegisterOptions, usePasskeyRegisterComplete } from '../../api/hooks/passkey/passkey.hooks';
-import type { PasskeyListCommand } from '@bkeenke/shm-contract';
-import ConfirmModal from '../ConfirmModal';
+import { passkeyApi, PasskeyCredential } from '../../api/client';
+import ConfirmModal from './../ConfirmModal';
 import { config } from '../../config';
-
-type PasskeyCredential = PasskeyListCommand.Response['credentials'][number];
 
 function base64UrlToArrayBuffer(base64url: string): ArrayBuffer {
   const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
@@ -36,31 +33,49 @@ interface PasskeySettingsProps {
 
 export default function PasskeySettings({ embedded = false }: PasskeySettingsProps) {
   const { t } = useTranslation();
-  const isWebAuthnSupported = !!window.PublicKeyCredential;
-
-  // Data hooks
-  const { data: passkeyData, isLoading: loading, refetch: refetchCredentials } = usePasskeyList();
-  const passkeyRename = usePasskeyRename();
-  const passkeyDelete = usePasskeyDelete();
-  const registerOptions = usePasskeyRegisterOptions();
-  const registerComplete = usePasskeyRegisterComplete();
-
-  const credentials = passkeyData?.[0]?.credentials || [];
-
-  // UI state
+  const [credentials, setCredentials] = useState<PasskeyCredential[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [registering, setRegistering] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [credentialToDelete, setCredentialToDelete] = useState<PasskeyCredential | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [credentialToRename, setCredentialToRename] = useState<PasskeyCredential | null>(null);
   const [newName, setNewName] = useState('');
+  const [renaming, setRenaming] = useState(false);
   const [manageModalOpen, setManageModalOpen] = useState(false);
-  const [registering, setRegistering] = useState(false);
+  const isWebAuthnSupported = !!window.PublicKeyCredential;
+
+  const loadCredentials = async () => {
+    try {
+      const response = await passkeyApi.list();
+      const data = response.data.data;
+      const passkeyData = Array.isArray(data) ? data[0] : data;
+      setCredentials(passkeyData?.credentials || []);
+    } catch {
+      setCredentials([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (config.PASSKEY_ENABLE !== 'true') {
+      setLoading(false);
+      return;
+    }
+    if (isWebAuthnSupported) {
+      loadCredentials();
+    } else {
+      setLoading(false);
+    }
+  }, [isWebAuthnSupported]);
 
   const handleRegister = async () => {
     if (!isWebAuthnSupported) {
       notifications.show({
-        title: String(t('common.error')),
-        message: String(t('passkey.notSupported')),
+        title: t('common.error'),
+        message: t('passkey.notSupported'),
         color: 'red',
       });
       return;
@@ -68,7 +83,9 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
 
     setRegistering(true);
     try {
-      const options = await registerOptions.mutateAsync();
+      const optionsResponse = await passkeyApi.registerOptions();
+      const optionsData = optionsResponse.data.data;
+      const options = Array.isArray(optionsData) ? optionsData[0] : optionsData;
       const publicKeyCredentialCreationOptions: PublicKeyCredentialCreationOptions = {
         challenge: base64UrlToArrayBuffer(options.challenge),
         rp: {
@@ -107,7 +124,7 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
 
       const response = credential.response as AuthenticatorAttestationResponse;
 
-      await registerComplete.mutateAsync({
+      await passkeyApi.registerComplete({
         credential_id: arrayBufferToBase64Url(credential.rawId),
         rawId: arrayBufferToBase64Url(credential.rawId),
         response: {
@@ -117,24 +134,23 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
       });
 
       notifications.show({
-        title: String(t('common.success')),
-        message: String(t('passkey.registerSuccess')),
+        title: t('common.success'),
+        message: t('passkey.registerSuccess'),
         color: 'green',
       });
-      refetchCredentials();
-    } catch (error: unknown) {
+      loadCredentials();
+    } catch (error: any) {
       console.error('Passkey registration error:', error);
 
-      let errorMessage = String(t('passkey.registerError'));
-      const err = error as { name?: string };
-      if (err?.name === 'InvalidStateError') {
-        errorMessage = String(t('passkey.alreadyRegistered'));
-      } else if (err?.name === 'NotAllowedError') {
-        errorMessage = String(t('passkey.cancelled'));
+      let errorMessage = t('passkey.registerError');
+      if (error?.name === 'InvalidStateError') {
+        errorMessage = t('passkey.alreadyRegistered');
+      } else if (error?.name === 'NotAllowedError') {
+        errorMessage = t('passkey.cancelled');
       }
 
       notifications.show({
-        title: String(t('common.error')),
+        title: t('common.error'),
         message: errorMessage,
         color: 'red',
       });
@@ -148,27 +164,29 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
     setDeleteModalOpen(true);
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!credentialToDelete) return;
 
-    passkeyDelete.mutate(credentialToDelete.id, {
-      onSuccess: () => {
-        notifications.show({
-          title: String(t('common.success')),
-          message: String(t('passkey.deleteSuccess')),
-          color: 'green',
-        });
-        setDeleteModalOpen(false);
-        setCredentialToDelete(null);
-      },
-      onError: () => {
-        notifications.show({
-          title: String(t('common.error')),
-          message: String(t('passkey.deleteError')),
-          color: 'red',
-        });
-      },
-    });
+    setDeleting(true);
+    try {
+      await passkeyApi.delete(credentialToDelete.id);
+      notifications.show({
+        title: t('common.success'),
+        message: t('passkey.deleteSuccess'),
+        color: 'green',
+      });
+      setDeleteModalOpen(false);
+      setCredentialToDelete(null);
+      loadCredentials();
+    } catch {
+      notifications.show({
+        title: t('common.error'),
+        message: t('passkey.deleteError'),
+        color: 'red',
+      });
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const openRenameModal = (credential: PasskeyCredential) => {
@@ -177,31 +195,30 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
     setRenameModalOpen(true);
   };
 
-  const handleRename = () => {
+  const handleRename = async () => {
     if (!credentialToRename || !newName.trim()) return;
 
-    passkeyRename.mutate(
-      { credentialId: credentialToRename.id, name: newName.trim() },
-      {
-        onSuccess: () => {
-          notifications.show({
-            title: String(t('common.success')),
-            message: String(t('passkey.renameSuccess')),
-            color: 'green',
-          });
-          setRenameModalOpen(false);
-          setCredentialToRename(null);
-          setNewName('');
-        },
-        onError: () => {
-          notifications.show({
-            title: String(t('common.error')),
-            message: String(t('passkey.renameError')),
-            color: 'red',
-          });
-        },
-      }
-    );
+    setRenaming(true);
+    try {
+      await passkeyApi.rename(credentialToRename.id, newName.trim());
+      notifications.show({
+        title: t('common.success'),
+        message: t('passkey.renameSuccess'),
+        color: 'green',
+      });
+      setRenameModalOpen(false);
+      setCredentialToRename(null);
+      setNewName('');
+      loadCredentials();
+    } catch {
+      notifications.show({
+        title: t('common.error'),
+        message: t('passkey.renameError'),
+        color: 'red',
+      });
+    } finally {
+      setRenaming(false);
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -211,10 +228,6 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
       return dateString;
     }
   };
-
-  if (config.PASSKEY_ENABLE !== 'true') {
-    return null;
-  }
 
   if (!isWebAuthnSupported) {
     const content = (
@@ -286,7 +299,7 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
         </Text>
       ) : (
         <Stack gap="sm">
-          {(credentials as PasskeyCredential[]).map((credential) => (
+          {credentials.map((credential) => (
             <Box
               key={credential.id}
               p="sm"
@@ -383,7 +396,7 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
         message={t('passkey.deleteConfirm', { name: credentialToDelete?.name || '' })}
         confirmLabel={t('common.delete')}
         confirmColor="red"
-        loading={passkeyDelete.isPending}
+        loading={deleting}
       />
 
       <Modal
@@ -402,7 +415,7 @@ export default function PasskeySettings({ embedded = false }: PasskeySettingsPro
             <Button variant="light" onClick={() => setRenameModalOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={handleRename} loading={passkeyRename.isPending}>
+            <Button onClick={handleRename} loading={renaming}>
               {t('common.save')}
             </Button>
           </Group>

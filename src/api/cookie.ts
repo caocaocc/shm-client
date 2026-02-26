@@ -1,4 +1,4 @@
-const COOKIE_NAME = 'session-id';
+const COOKIE_NAME = 'session_id';
 const COOKIE_DAYS = 3;
 
 export function setCookie(value: string): void {

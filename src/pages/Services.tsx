@@ -3,26 +3,13 @@ import { Card, Text, Stack, Group, Badge, Button, Modal, ActionIcon, Loader, Cen
 import { IconQrcode, IconCopy, IconCheck, IconDownload, IconRefresh, IconTrash, IconPlus, IconPlayerStop, IconExchange, IconCreditCard, IconWallet } from '@tabler/icons-react';
 import { useDisclosure } from '@mantine/hooks';
 import { useTranslation } from 'react-i18next';
+import { api, servicesApi, userApi } from '../api/client';
 import { notifications } from '@mantine/notifications';
 import QrModal from '../components/QrModal';
 import OrderServiceModal from '../components/OrderServiceModal';
 import ConfirmModal from '../components/ConfirmModal';
 import { useCopyToClipboard } from '../hooks/useCopyToClipboard';
 import { config } from '../config';
-import {
-  useUserServices,
-  useStopService,
-  useDeleteService,
-  useServicesOrderList,
-  usePaymentForecast,
-  usePaySystems,
-  useStorageItem,
-} from '../api/hooks';
-import { GetUserServicesCommand } from '@bkeenke/shm-contract';
-
-type UserService = GetUserServicesCommand.Response[number] & {
-  children?: UserService[];
-};
 
 interface ForecastItem {
   name: string;
@@ -30,6 +17,34 @@ interface ForecastItem {
   total: number;
   status: string;
   user_service_id: string;
+}
+
+interface PaySystem {
+  name: string;
+  shm_url: string;
+  internal?: number;
+  recurring?: number;
+  weight?: number;
+}
+
+interface ServiceInfo {
+  category: string;
+  cost: number;
+  name: string;
+}
+
+interface UserService {
+  user_service_id: number;
+  service_id: number;
+  name?: string;
+  service: ServiceInfo;
+  status: string;
+  expire: string | null;
+  next: number | null;
+  created: string;
+  parent: number | null;
+  settings?: Record<string, unknown>;
+  children?: UserService[];
 }
 
 const statusColors: Record<string, string> = {
@@ -67,95 +82,28 @@ interface ServiceDetailProps {
 }
 
 function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps) {
+  const [storageData, setStorageData] = useState<string | null>(null);
+  const [subscriptionUrl, setSubscriptionUrl] = useState<string | null>(null);
+  const [nextServiceInfo, setNextServiceInfo] = useState<{ name: string; cost: number } | null>(null);
+  const [nextServiceLoading, setNextServiceLoading] = useState(false);
+  const [, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<string | null>('info');
   const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [selectedPaySystem, setSelectedPaySystem] = useState<string | null>(null);
-  const [payAmount, setPayAmount] = useState<number | string>(0);
-  const [paying, setPaying] = useState(false);
   const { t, i18n } = useTranslation();
   const { copied: urlCopied, copy: copyUrl } = useCopyToClipboard();
 
-  const category = normalizeCategory(service.service.category);
-  const isVpn = category === 'vpn';
-  const isProxy = category === 'proxy';
-  const isVpnOrProxy = isVpn || isProxy;
-  const canDelete = ['BLOCK', 'NOT PAID', 'ERROR'].includes(service.status);
-  const canStop = service.status === 'ACTIVE';
-  const canChange = ['BLOCK', 'ACTIVE'].includes(service.status);
-  const isNotPaid = service.status === 'NOT PAID';
-
-  // Hooks for mutations
-  const stopServiceMutation = useStopService();
-  const deleteServiceMutation = useDeleteService();
-
-  // Hooks for queries
-  const { data: forecastData, isLoading: forecastLoading } = usePaymentForecast();
-  const { data: paySystemsData, isLoading: paySystemsLoading } = usePaySystems();
-
-  // Storage hooks
-  const proxyPrefix = config.PROXY_STORAGE_PREFIX || 'vpn_mrzb_';
-  const vpnPrefix = config.VPN_STORAGE_PREFIX || 'vpn';
-
-  const { data: proxyStorageData } = useStorageItem(
-    `${proxyPrefix}${service.user_service_id}`,
-    { enabled: isProxy && service.status === 'ACTIVE', format: 'json' }
-  );
-
-  const { data: vpnStorageData } = useStorageItem(
-    `${vpnPrefix}${service.user_service_id}`,
-    { enabled: isVpn && service.status === 'ACTIVE', format: 'raw' }
-  );
-
-  // Next service info
-  const { data: nextServiceData, isLoading: nextServiceLoading } = useServicesOrderList(
-    service.next ? { service_id: service.next } : undefined
-  );
-
-  const subscriptionUrl = proxyStorageData?.subscriptionUrl || null;
-  const storageData = typeof vpnStorageData?.raw === 'string' ? vpnStorageData.raw : null;
-
-  const nextServiceInfo = nextServiceData && nextServiceData.length > 0
-    ? { name: nextServiceData[0].name, cost: nextServiceData[0].cost }
-    : null;
-
-  // Calculate forecast
-  const forecastTotal = (() => {
-    if (!isNotPaid || !forecastData) return null;
-    const balance = (forecastData as { balance?: number })?.balance || 0;
-    const items = (forecastData as { items?: ForecastItem[] })?.items;
-    const item = items?.find((it: ForecastItem) => String(it.user_service_id) === String(service.user_service_id));
-    if (item) {
-      return Math.max(0, Math.ceil((item.total - balance) * 100) / 100);
-    }
-    const total = (forecastData as { total?: number })?.total;
-    return total && total > 0 ? Math.max(0, Math.ceil(total * 100) / 100) : null;
-  })();
-
-  // Pay systems
-  const paySystems = paySystemsData
-    ? [...paySystemsData].sort((a, b) => ((b as { weight?: number }).weight || 0) - ((a as { weight?: number }).weight || 0))
-    : [];
-
-  useEffect(() => {
-    if (forecastTotal !== null && forecastTotal > 0) {
-      setPayAmount(forecastTotal);
-    }
-  }, [forecastTotal]);
-
-  useEffect(() => {
-    if (paySystems.length > 0 && !selectedPaySystem) {
-      setSelectedPaySystem((paySystems[0] as { shm_url: string }).shm_url);
-    }
-  }, [paySystems, selectedPaySystem]);
-
-  useEffect(() => {
-    if ((subscriptionUrl || storageData) && service.status === 'ACTIVE') {
-      setActiveTab('config');
-    }
-  }, [subscriptionUrl, storageData, service.status]);
+  const [forecastTotal, setForecastTotal] = useState<number | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [paySystems, setPaySystems] = useState<PaySystem[]>([]);
+  const [selectedPaySystem, setSelectedPaySystem] = useState<string | null>(null);
+  const [payAmount, setPayAmount] = useState<number | string>(0);
+  const [paySystemsLoading, setPaySystemsLoading] = useState(false);
+  const [paying, setPaying] = useState(false);
 
   const downloadConfig = async () => {
     if (!storageData) return;
@@ -176,8 +124,66 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
     }
   };
 
+  const canDelete = ['BLOCK', 'NOT PAID', 'ERROR'].includes(service.status);
+  const canStop = service.status === 'ACTIVE';
+  const canChange = ['BLOCK', 'ACTIVE'].includes(service.status);
+  const isNotPaid = service.status === 'NOT PAID';
+
+  useEffect(() => {
+    if (!isNotPaid) return;
+    const fetchForecast = async () => {
+      setForecastLoading(true);
+      try {
+        const response = await userApi.getForecast();
+        const forecastData = response.data.data;
+        if (Array.isArray(forecastData) && forecastData.length > 0) {
+          const forecast = forecastData[0];
+          const balance = forecast.balance || 0;
+          const item = forecast.items?.find(
+            (it: ForecastItem) => String(it.user_service_id) === String(service.user_service_id)
+          );
+          if (item) {
+            const needToPay = Math.max(0, Math.ceil((item.total - balance) * 100) / 100);
+            setForecastTotal(needToPay);
+            setPayAmount(needToPay);
+          } else if (forecast.total > 0) {
+            setForecastTotal(forecast.total);
+            setPayAmount(Math.max(0, Math.ceil(forecast.total * 100) / 100));
+          }
+        }
+      } catch {
+      } finally {
+        setForecastLoading(false);
+      }
+    };
+    fetchForecast();
+  }, [service.user_service_id, isNotPaid]);
+
+  const loadPaySystems = async () => {
+    if (paySystems.length > 0) return;
+    setPaySystemsLoading(true);
+    try {
+      const response = await userApi.getPaySystems();
+      const data: PaySystem[] = response.data.data || [];
+      const sorted = data.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+      setPaySystems(sorted);
+      if (sorted.length > 0) {
+        setSelectedPaySystem(sorted[0].shm_url);
+      }
+    } catch {
+    } finally {
+      setPaySystemsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isNotPaid && forecastTotal !== null && forecastTotal > 0) {
+      loadPaySystems();
+    }
+  }, [isNotPaid, forecastTotal]);
+
   const handlePay = async () => {
-    const paySystem = paySystems.find((ps: { shm_url: string }) => ps.shm_url === selectedPaySystem) as { shm_url: string; internal?: number; recurring?: number; name: string } | undefined;
+    const paySystem = paySystems.find(ps => ps.shm_url === selectedPaySystem);
     if (!paySystem) return;
     setPaying(true);
     try {
@@ -204,8 +210,9 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
   };
 
   const handleDelete = async () => {
+    setDeleting(true);
     try {
-      await deleteServiceMutation.mutateAsync(service.user_service_id);
+      await api.delete(`/user/service?user_service_id=${service.user_service_id}`);
       notifications.show({
         title: t('common.success'),
         message: t('services.serviceDeleted'),
@@ -213,18 +220,21 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
       });
       setConfirmDelete(false);
       onDelete?.();
-    } catch {
+    } catch (error) {
       notifications.show({
         title: t('common.error'),
         message: t('services.serviceDeleteError'),
         color: 'red',
       });
+    } finally {
+      setDeleting(false);
     }
   };
 
   const handleStop = async () => {
+    setStopping(true);
     try {
-      await stopServiceMutation.mutateAsync(service.user_service_id);
+      await userApi.stopService(service.user_service_id);
       notifications.show({
         title: t('common.success'),
         message: t('services.serviceStopped'),
@@ -232,17 +242,90 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
       });
       setConfirmStop(false);
       onDelete?.();
-    } catch {
+    } catch (error) {
       notifications.show({
         title: t('common.error'),
         message: t('services.serviceStopError'),
         color: 'red',
       });
+    } finally {
+      setStopping(false);
     }
   };
 
+  const category = normalizeCategory(service.service.category);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      if (category === 'proxy') {
+        const prefix = config.PROXY_STORAGE_PREFIX ? config.PROXY_STORAGE_PREFIX : 'vpn_mrzb_';
+        try {
+          const mzResponse = await api.get(`/storage/manage/${prefix}${service.user_service_id}?format=json`);
+          const url = mzResponse.data.subscription_url || mzResponse.data.response?.subscriptionUrl;
+          if (url) {
+            setSubscriptionUrl(url);
+          }
+          setActiveTab('config');
+        } catch {
+          if (!config.PROXY_STORAGE_PREFIX) {
+            try {
+              const remnaResponse = await api.get(`/storage/manage/vpn_remna_${service.user_service_id}?format=json`);
+              const url = remnaResponse.data.subscription_url || remnaResponse.data.response?.subscriptionUrl;
+              if (url) {
+                setSubscriptionUrl(url);
+              }
+            } catch {
+            }
+          }
+        }
+      } else if (category === 'vpn') {
+        const prefix = config.VPN_STORAGE_PREFIX ? config.VPN_STORAGE_PREFIX : 'vpn';
+        try {
+          const vpnResponse = await api.get(`/storage/manage/${prefix}${service.user_service_id}`);
+          const configData = vpnResponse.data;
+          if (configData) {
+            setStorageData(configData);
+          }
+          setActiveTab('config');
+        } catch {
+        }
+      }
+      setLoading(false);
+    };
+    fetchData();
+  }, [service.user_service_id, category]);
+
+  useEffect(() => {
+    const fetchNextService = async () => {
+      if (!service.next) {
+        setNextServiceInfo(null);
+        return;
+      }
+      setNextServiceLoading(true);
+      try {
+        const response = await servicesApi.order_list({ service_id: String(service.next) });
+        const data = response.data.data || [];
+        const nextService = Array.isArray(data) ? data[0] : data;
+        if (nextService?.name && typeof nextService.cost === 'number') {
+          setNextServiceInfo({ name: nextService.name, cost: nextService.cost });
+        } else {
+          setNextServiceInfo(null);
+        }
+      } catch {
+        setNextServiceInfo(null);
+      } finally {
+        setNextServiceLoading(false);
+      }
+    };
+
+    fetchNextService();
+  }, [service.next]);
+
+  const isVpn = category === 'vpn';
+  const isProxy = category === 'proxy';
+  const isVpnOrProxy = isVpn || isProxy;
   const statusColor = statusColors[service.status] || 'gray';
-  const statusLabel = String(t(`status.${service.status}`, service.status));
+  const statusLabel = t(`status.${service.status}`, service.status);
 
   return (
     <Stack gap="md">
@@ -292,9 +375,9 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
             {service.children && service.children.length > 0 && (
               <>
                 <Text size="sm" c="dimmed" mt="md">{t('services.includedServices')}:</Text>
-                {service.children.map((child: UserService) => {
+                {service.children.map((child) => {
                   const childStatusColor = statusColors[child.status] || 'gray';
-                  const childStatusLabel = String(t(`status.${child.status}`, child.status));
+                  const childStatusLabel = t(`status.${child.status}`, child.status);
                   return (
                     <Group key={child.user_service_id} justify="space-between" ml="md">
                       <Text size="sm">{child.service.name}</Text>
@@ -384,7 +467,7 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
                   <>
                     <Select
                       label={t('payments.paymentSystem')}
-                      data={paySystems.map((ps: { shm_url: string; name: string }) => ({ value: ps.shm_url, label: ps.name }))}
+                      data={paySystems.map(ps => ({ value: ps.shm_url, label: ps.name }))}
                       value={selectedPaySystem}
                       onChange={setSelectedPaySystem}
                       size="sm"
@@ -463,7 +546,7 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
         message={t('services.stopServiceMessage')}
         confirmLabel={t('services.stop')}
         confirmColor="orange"
-        loading={stopServiceMutation.isPending}
+        loading={stopping}
       />
 
       <ConfirmModal
@@ -474,7 +557,7 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
         message={t('services.deleteServiceMessage')}
         confirmLabel={t('common.delete')}
         confirmColor="red"
-        loading={deleteServiceMutation.isPending}
+        loading={deleting}
       />
     </Stack>
   );
@@ -483,7 +566,7 @@ function ServiceDetail({ service, onDelete, onChangeTariff }: ServiceDetailProps
 function ServiceCard({ service, onClick, isChild = false, isLastChild = false }: { service: UserService; onClick: () => void; isChild?: boolean; isLastChild?: boolean }) {
   const { t, i18n } = useTranslation();
   const statusColor = statusColors[service.status] || 'gray';
-  const statusLabel = String(t(`status.${service.status}`, service.status));
+  const statusLabel = t(`status.${service.status}`, service.status);
 
   if (isChild) {
     return (
@@ -577,6 +660,8 @@ function ServiceCard({ service, onClick, isChild = false, isLastChild = false }:
 }
 
 export default function Services() {
+  const [services, setServices] = useState<UserService[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedService, setSelectedService] = useState<UserService | null>(null);
   const [opened, { open, close }] = useDisclosure(false);
   const [orderModalOpened, { open: openOrderModal, close: closeOrderModal }] = useDisclosure(false);
@@ -587,28 +672,35 @@ export default function Services() {
   const perPage = 5;
   const { t } = useTranslation();
 
-  const { data: servicesData, isLoading, refetch } = useUserServices();
+  const fetchServices = async (background = false) => {
+    if (!background) setLoading(true);
+    try {
+      const response = await api.get('/user/service', { params: { limit: 1000 } });
+      const data: UserService[] = response.data.data || [];
 
-  // Build services tree with children
-  const services = (() => {
-    if (!servicesData) return [];
-    const data = servicesData as UserService[];
-    const serviceMap = new Map<number, UserService>();
-    data.forEach(s => serviceMap.set(s.user_service_id, { ...s, children: [] }));
+      const serviceMap = new Map<number, UserService>();
+      data.forEach(s => serviceMap.set(s.user_service_id, { ...s, children: [] }));
 
-    const rootServices: UserService[] = [];
-    serviceMap.forEach(service => {
-      if (service.parent && serviceMap.has(service.parent)) {
-        const parent = serviceMap.get(service.parent)!;
-        parent.children = parent.children || [];
-        parent.children.push(service);
-      } else if (!service.parent) {
-        rootServices.push(service);
-      }
-    });
+      const rootServices: UserService[] = [];
+      serviceMap.forEach(service => {
+        if (service.parent && serviceMap.has(service.parent)) {
+          const parent = serviceMap.get(service.parent)!;
+          parent.children = parent.children || [];
+          parent.children.push(service);
+        } else if (!service.parent) {
+          rootServices.push(service);
+        }
+      });
 
-    return rootServices;
-  })();
+      setServices(rootServices);
+      return rootServices;
+    } catch (error) {
+      console.error('Failed to fetch services:', error);
+      return [];
+    } finally {
+      if (!background) setLoading(false);
+    }
+  };
 
   const hasProgressServices = (serviceList: UserService[]): boolean => {
     for (const service of serviceList) {
@@ -626,9 +718,12 @@ export default function Services() {
     return false;
   };
 
-  // Auto-refresh for PROGRESS status
   useEffect(() => {
-    if (!services.length || isLoading) return;
+    fetchServices();
+  }, []);
+
+  useEffect(() => {
+    if (!services.length || loading) return;
 
     const hasProgress = hasProgressServices(services);
 
@@ -636,7 +731,7 @@ export default function Services() {
       const delay = refreshAttemptsRef.current === 0 ? 1000 : 3000;
       const timer = setTimeout(async () => {
         refreshAttemptsRef.current += 1;
-        await refetch();
+        await fetchServices(true);
       }, delay);
       return () => clearTimeout(timer);
     }
@@ -644,21 +739,20 @@ export default function Services() {
     if (!hasProgress) {
       refreshAttemptsRef.current = 0;
     }
-  }, [services, isLoading, refetch]);
+  }, [services, loading]);
 
-  // Auto-refresh for NOT PAID status
   useEffect(() => {
-    if (!services.length || isLoading) return;
+    if (!services.length || loading) return;
 
     const hasNotPaid = hasNotPaidServices(services);
     if (!hasNotPaid) return;
 
     const interval = setInterval(() => {
-      refetch();
+      fetchServices(true);
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [services, isLoading, refetch]);
+  }, [services, loading]);
 
   const handleServiceClick = (service: UserService) => {
     setSelectedService(service);
@@ -671,11 +765,6 @@ export default function Services() {
     openChangeModal();
   };
 
-  const handleRefresh = () => {
-    refreshAttemptsRef.current = 0;
-    refetch();
-  };
-
   const groupedServices = services.reduce((acc, service) => {
     const category = normalizeCategory(service.service.category);
 
@@ -686,7 +775,7 @@ export default function Services() {
     return acc;
   }, {} as Record<string, UserService[]>);
 
-  if (isLoading) {
+  if (loading) {
     return (
       <Center h={300}>
         <Loader size="lg" />
@@ -702,7 +791,7 @@ export default function Services() {
           <Button leftSection={<IconPlus size={16} />} onClick={openOrderModal}>
             {t('services.orderService')}
           </Button>
-          <Button leftSection={<IconRefresh size={16} />} variant="light" onClick={handleRefresh}>
+          <Button leftSection={<IconRefresh size={16} />} variant="light" onClick={() => fetchServices()}>
             {t('common.refresh')}
           </Button>
         </Group>
@@ -721,7 +810,7 @@ export default function Services() {
         </Paper>
       ) : (
         <Accordion variant="separated" radius="md" multiple defaultValue={Object.keys(groupedServices)}>
-          {(Object.entries(groupedServices) as [string, UserService[]][]).map(([category, categoryServices]) => {
+          {Object.entries(groupedServices).map(([category, categoryServices]) => {
             const page = categoryPages[category] || 1;
             const totalPages = Math.ceil(categoryServices.length / perPage);
             const paginatedServices = categoryServices.slice((page - 1) * perPage, page * perPage);
@@ -735,7 +824,7 @@ export default function Services() {
               </Accordion.Control>
               <Accordion.Panel>
                 <Stack gap="sm">
-                  {paginatedServices.map((service: UserService) => (
+                  {paginatedServices.map((service) => (
                     <Box key={service.user_service_id}>
                       <ServiceCard
                         service={service}
@@ -743,7 +832,7 @@ export default function Services() {
                       />
                       {service.children && service.children.length > 0 && (
                         <Stack gap="xs" mt="xs" ml="md">
-                          {service.children.map((child: UserService, index: number) => (
+                          {service.children.map((child, index) => (
                             <ServiceCard
                               key={child.user_service_id}
                               service={child}
@@ -781,7 +870,7 @@ export default function Services() {
             onDelete={() => {
               close();
               refreshAttemptsRef.current = 0;
-              refetch();
+              fetchServices();
             }}
             onChangeTariff={handleChangeTariff}
           />
@@ -793,7 +882,7 @@ export default function Services() {
         onClose={closeOrderModal}
         onOrderSuccess={() => {
           refreshAttemptsRef.current = 0;
-          refetch();
+          fetchServices();
         }}
       />
 
@@ -817,7 +906,7 @@ export default function Services() {
         }
         onChangeSuccess={() => {
           refreshAttemptsRef.current = 0;
-          refetch();
+          fetchServices();
         }}
       />
     </Stack>
