@@ -2,7 +2,7 @@ import { Modal, Stack, Center, Text, Button, Group, Tooltip, ActionIcon, Alert }
 import { useTranslation } from 'react-i18next';
 import { IconCopy, IconCheck, IconDownload, IconAlertCircle } from '@tabler/icons-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { useCopyToClipboard } from '../hooks/useCopyToClipboard';
+import { useClipboard } from '@mantine/hooks';
 import { useMemo } from 'react';
 
 const MAX_QR_DATA_LENGTH = 2900;
@@ -18,7 +18,7 @@ interface QrModalProps {
 
 export default function QrModal({ opened, onClose, data, title, filename, onDownload }: QrModalProps) {
   const { t } = useTranslation();
-  const { copied, copy } = useCopyToClipboard();
+  const clipboard = useClipboard({ timeout: 1000 });
 
   const isDataTooLong = useMemo(() => {
     return data ? data.length > MAX_QR_DATA_LENGTH : false;
@@ -73,14 +73,14 @@ export default function QrModal({ opened, onClose, data, title, filename, onDown
         </Text>
 
         <Group>
-          <Tooltip label={copied ? t('common.copied') : t('common.copy')}>
+          <Tooltip label={clipboard.copied ? t('common.copied') : t('common.copy')}>
             <Button
               variant="light"
-              leftSection={copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
-              color={copied ? 'teal' : 'blue'}
-              onClick={() => copy(data)}
+              leftSection={clipboard.copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+              color={clipboard.copied ? 'teal' : 'blue'}
+              onClick={() => clipboard.copy(data)}
             >
-              {copied ? t('common.copied') : t('common.copy')}
+              {clipboard.copied ? t('common.copied') : t('common.copy')}
             </Button>
           </Tooltip>
 

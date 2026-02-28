@@ -1,5 +1,8 @@
 {
   "common": {
+    "notFound": "Not found",
+    "notFoundDesc": "The page you are looking for does not exist",
+    "backToHome": "Back to home",
     "loading": "Loading...",
     "error": "Error",
     "success": "Success",
@@ -77,6 +80,7 @@
     "title": "Profile",
     "balance": "Balance",
     "credit": "Credit",
+    "discount": "Personal discount",
     "bonus": "Bonuses",
     "topUp": "Top up",
     "enterPromo": "Enter promo code",
@@ -135,7 +139,9 @@
     "methods": "methods",
     "autopaymentEnabled": "Auto-payment enabled",
     "user": "User",
-    "telegramDescription": "Linking Telegram will allow you to receive notifications about the status of services and payments, as well as pay for Telegram services with stars."
+    "telegramDescription": "Linking Telegram will allow you to receive notifications about the status of services and payments, as well as pay for Telegram services with stars.",
+    "partnerLink": "Partner link",
+    "partnerLinkDescription": "Invite friends and receive bonuses for their orders and payments."
   },
   "services": {
     "title": "My Services",
@@ -174,7 +180,8 @@
     "serviceStopped": "Service stopped",
     "serviceStopError": "Failed to stop service",
     "amountToPay": "Amount to pay",
-    "payService": "Pay {{amount}} ₽"
+    "payService": "Pay {{amount}} ₽",
+    "savings": "You save {{amount}} ₽ with discount"
   },
   "categories": {
     "vpn": "VPN",

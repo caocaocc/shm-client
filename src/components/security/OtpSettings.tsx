@@ -1,84 +1,98 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, Text, Stack, Group, Button, TextInput, Badge, Loader, Box, Modal, Code, ActionIcon, SimpleGrid } from '@mantine/core';
 import { IconShieldLock, IconCheck, IconCopy, IconQrcode } from '@tabler/icons-react';
-import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { useClipboard } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { useTranslation } from 'react-i18next';
-import { useOtpStatus, useOtpSetup, useOtpEnable, useOtpDisable } from '../../api/hooks/otp/otp.hooks';
-import type { OtpSetupCommand } from '@bkeenke/shm-contract';
-import QrModal from '../QrModal';
+import { otpApi, OtpStatus, OtpSetupResponse } from '../../api/client';
+import QrModal from './../QrModal';
 import { config } from '../../config';
 
 interface OtpSettingsProps {
   embedded?: boolean;
 }
 
-type OtpSetupData = OtpSetupCommand.Response;
-
 export default function OtpSettings({ embedded = false }: OtpSettingsProps) {
   const { t } = useTranslation();
-
-  // Data hooks
-  const { data: status, isLoading: loading, refetch: refetchStatus } = useOtpStatus();
-  const otpSetup = useOtpSetup();
-  const otpEnable = useOtpEnable();
-  const otpDisable = useOtpDisable();
-
-  // UI state
-  const [setupData, setSetupData] = useState<OtpSetupData | null>(null);
+  const [status, setStatus] = useState<OtpStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [setupData, setSetupData] = useState<OtpSetupResponse | null>(null);
   const [setupModalOpen, setSetupModalOpen] = useState(false);
   const [disableModalOpen, setDisableModalOpen] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [token, setToken] = useState('');
   const [disableToken, setDisableToken] = useState('');
+  const [enabling, setEnabling] = useState(false);
+  const [disabling, setDisabling] = useState(false);
   const [showBackupCodes, setShowBackupCodes] = useState(false);
-  const { copied: secretCopied, copy: copySecret } = useCopyToClipboard();
-  const { copied: backupCopied, copy: copyBackup } = useCopyToClipboard();
+  const clipboard = useClipboard({ timeout: 1000 });
 
-  const handleSetup = () => {
-    otpSetup.mutate(undefined, {
-      onSuccess: (data) => {
-        setSetupData(data);
-        setSetupModalOpen(true);
-        setToken('');
-      },
-      onError: () => {
-        notifications.show({
-          title: String(t('common.error')),
-          message: String(t('otp.setupError')),
-          color: 'red',
-        });
-      },
-    });
+  const loadStatus = async () => {
+    try {
+      const response = await otpApi.status();
+      const data = response.data.data;
+      const otpData = Array.isArray(data) ? data[0] : data;
+      setStatus(otpData);
+    } catch {
+      setStatus({ enabled: false, verified: false, required: false });
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleEnable = () => {
+  useEffect(() => {
+    if (config.OTP_ENABLE !== 'true') {
+      setLoading(false);
+      return;
+    }
+    loadStatus();
+  }, []);
+
+  const handleSetup = async () => {
+    try {
+      const response = await otpApi.setup();
+      const data = response.data.data;
+      const setupResponse = Array.isArray(data) ? data[0] : data;
+      setSetupData(setupResponse);
+      setSetupModalOpen(true);
+      setToken('');
+    } catch {
+      notifications.show({
+        title: t('common.error'),
+        message: t('otp.setupError'),
+        color: 'red',
+      });
+    }
+  };
+
+  const handleEnable = async () => {
     if (!token || token.length !== 6) {
       notifications.show({
-        title: String(t('common.error')),
-        message: String(t('otp.enterValidCode')),
+        title: t('common.error'),
+        message: t('otp.enterValidCode'),
         color: 'red',
       });
       return;
     }
 
-    otpEnable.mutate(token, {
-      onSuccess: () => {
-        notifications.show({
-          title: String(t('common.success')),
-          message: String(t('otp.enableSuccess')),
-          color: 'green',
-        });
-        setShowBackupCodes(true);
-      },
-      onError: () => {
-        notifications.show({
-          title: String(t('common.error')),
-          message: String(t('otp.invalidCode')),
-          color: 'red',
-        });
-      },
-    });
+    setEnabling(true);
+    try {
+      await otpApi.enable(token);
+      notifications.show({
+        title: t('common.success'),
+        message: t('otp.enableSuccess'),
+        color: 'green',
+      });
+      setShowBackupCodes(true);
+    } catch {
+      notifications.show({
+        title: t('common.error'),
+        message: t('otp.invalidCode'),
+        color: 'red',
+      });
+    } finally {
+      setEnabling(false);
+    }
   };
 
   const handleCloseSetup = () => {
@@ -86,42 +100,40 @@ export default function OtpSettings({ embedded = false }: OtpSettingsProps) {
     setSetupData(null);
     setToken('');
     setShowBackupCodes(false);
-    refetchStatus();
+    loadStatus();
   };
 
-  const handleDisable = () => {
+  const handleDisable = async () => {
     if (!disableToken) {
       notifications.show({
-        title: String(t('common.error')),
-        message: String(t('otp.enterCodeOrBackup')),
+        title: t('common.error'),
+        message: t('otp.enterCodeOrBackup'),
         color: 'red',
       });
       return;
     }
 
-    otpDisable.mutate(disableToken, {
-      onSuccess: () => {
-        notifications.show({
-          title: String(t('common.success')),
-          message: String(t('otp.disableSuccess')),
-          color: 'green',
-        });
-        setDisableModalOpen(false);
-        setDisableToken('');
-      },
-      onError: () => {
-        notifications.show({
-          title: String(t('common.error')),
-          message: String(t('otp.invalidCode')),
-          color: 'red',
-        });
-      },
-    });
+    setDisabling(true);
+    try {
+      await otpApi.disable(disableToken);
+      notifications.show({
+        title: t('common.success'),
+        message: t('otp.disableSuccess'),
+        color: 'green',
+      });
+      setDisableModalOpen(false);
+      setDisableToken('');
+      loadStatus();
+    } catch {
+      notifications.show({
+        title: t('common.error'),
+        message: t('otp.invalidCode'),
+        color: 'red',
+      });
+    } finally {
+      setDisabling(false);
+    }
   };
-
-  if (config.OTP_ENABLE !== 'true') {
-    return null;
-  }
 
   if (loading) {
     if (embedded) {
@@ -206,13 +218,9 @@ export default function OtpSettings({ embedded = false }: OtpSettingsProps) {
               style={{
                 display: 'flex',
                 justifyContent: 'center',
-                padding: '16px',
-                backgroundColor: 'white',
-                borderRadius: '8px',
               }}
             >
               <Button
-                variant="light"
                 leftSection={<IconQrcode size={18} />}
                 onClick={() => setQrModalOpen(true)}
               >
@@ -229,11 +237,11 @@ export default function OtpSettings({ embedded = false }: OtpSettingsProps) {
                 {setupData.secret}
               </Code>
               <ActionIcon
-                color={secretCopied ? 'green' : 'gray'}
+                color={clipboard.copied ? 'green' : 'gray'}
                 variant="subtle"
-                onClick={() => copySecret(setupData.secret)}
+                onClick={() => clipboard.copy(setupData.secret)}
               >
-                {secretCopied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                {clipboard.copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
               </ActionIcon>
             </Group>
 
@@ -248,7 +256,7 @@ export default function OtpSettings({ embedded = false }: OtpSettingsProps) {
 
             <Button
               onClick={handleEnable}
-              loading={otpEnable.isPending}
+              loading={enabling}
               disabled={token.length !== 6}
             >
               {t('otp.confirmEnable')}
@@ -266,7 +274,7 @@ export default function OtpSettings({ embedded = false }: OtpSettingsProps) {
 
             <Card withBorder p="md">
               <SimpleGrid cols={2} spacing="xs">
-                {setupData.backup_codes.map((code: string | number, index: number) => (
+                {setupData.backup_codes.map((code, index) => (
                   <Code key={index} style={{ textAlign: 'center', padding: '4px' }}>
                     {code}
                   </Code>
@@ -276,11 +284,11 @@ export default function OtpSettings({ embedded = false }: OtpSettingsProps) {
 
             <Button
               variant="light"
-              color={backupCopied ? 'green' : 'gray'}
-              leftSection={backupCopied ? <IconCheck size={16} /> : <IconCopy size={16} />}
-              onClick={() => copyBackup(setupData.backup_codes.join('\n'))}
+              color={clipboard.copied ? 'green' : 'gray'}
+              leftSection={clipboard.copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+              onClick={() => clipboard.copy(setupData.backup_codes.join('\n'))}
             >
-              {backupCopied ? t('common.copied') : t('otp.copyBackupCodes')}
+              {clipboard.copied ? t('common.copied') : t('otp.copyBackupCodes')}
             </Button>
 
             <Text size="xs" c="red">
@@ -335,7 +343,7 @@ export default function OtpSettings({ embedded = false }: OtpSettingsProps) {
             <Button
               color="red"
               onClick={handleDisable}
-              loading={otpDisable.isPending}
+              loading={disabling}
               disabled={!disableToken}
             >
               {t('otp.disable')}
